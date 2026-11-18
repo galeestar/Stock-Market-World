@@ -42,3 +42,28 @@ def save_to_csv(df):
 if __name__ == "__main__":
     market_df = fetch_market_data()
     save_to_csv(market_df)
+
+import matplotlib.pyplot as plt
+
+def save_chart_image():
+    if not os.path.exists(CSV_FILE):
+        return
+    df = pd.read_csv(CSV_FILE)
+    df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"])
+
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+
+    for symbol, group in df.groupby("ticker"):
+        group = group.sort_values("timestamp_utc")
+        norm = ((group["price"] / group["price"].iloc[0]) - 1) * 100
+        ax.plot(group["timestamp_utc"], norm, marker="o", label=symbol)
+
+    ax.set_title("Stock Market Progression (% Change)", fontsize=13, fontweight="bold")
+    ax.set_ylabel("Growth (%)")
+    ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
+    ax.legend()
+    plt.xticks(rotation=25)
+    plt.tight_layout()
+    plt.savefig("market_chart.png", dpi=150)
+    plt.close()
