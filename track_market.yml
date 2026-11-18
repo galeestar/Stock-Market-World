@@ -1,0 +1,38 @@
+name: Track Stock Market Progression
+
+on:
+  schedule:
+    # Runs at 21:30 UTC Monday through Friday
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch: # Allows you to trigger a manual test run anytime
+
+permissions:
+  contents: write # Required so GitHub Actions can push the updated CSV
+
+jobs:
+  update-market-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run stock tracker script
+        run: python tracker.py
+
+      - name: Commit and push updated data
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add market_history.csv
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update market data $(date -u +'%Y-%m-%d')" && git push)
