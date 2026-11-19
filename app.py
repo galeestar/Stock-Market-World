@@ -42,9 +42,10 @@ with tab_overview:
         filtered = df[df["ticker"].isin(selected)].copy()
         if not filtered.empty:
             if mode == "Normalized Growth (%)":
-                filtered["plot_val"] = filtered.groupby("ticker")["price"].transform(
-                    lambda x: ((x / x.iloc) - 1) * 100
-                )
+              filtered["plot_val"] = filtered.groupby("ticker")["price"].transform(
+                  lambda x: ((x / x.iloc[0]) - 1) * 100
+              )
+
                 y_title = "Return (%)"
             else:
                 filtered["plot_val"] = filtered["price"]
