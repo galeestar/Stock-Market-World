@@ -2,12 +2,11 @@ name: Track Stock Market Progression
 
 on:
   schedule:
-    # Runs automatically Monday-Friday at 21:30 UTC (after US market close)
     - cron: '30 21 * * 1-5'
-  workflow_dispatch: # Lets you click a button to run it manually anytime
+  workflow_dispatch:
 
 permissions:
-  contents: write # Gives the workflow permission to save market_history.csv
+  contents: write
 
 jobs:
   update-market-data:
@@ -34,5 +33,5 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@://github.com"
           git config --local user.name "github-actions[bot]"
-          git add market_history.csv
+          git add market_history.csv market_chart.png
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update market data $(date -u +'%Y-%m-%d')" && git push)
