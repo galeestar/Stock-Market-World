@@ -18,9 +18,9 @@ def fetch_market_data():
         hist = ticker.history(period="2d")
 
         if not hist.empty:
-            latest_close = round(float(hist["Close"].iloc[-1]), 2)
+            latest_close = round(float(hist["Close"].tail(1).item()), 2)
             prev_close = (
-                round(float(hist["Close"].iloc[0]), 2)
+                round(float(hist["Close"].head(1).item()), 2)
                 if len(hist) > 1
                 else latest_close
             )
@@ -64,7 +64,8 @@ def save_chart_image():
 
     for symbol, group in df.groupby("ticker"):
         group = group.sort_values("timestamp_utc")
-        norm = ((group["price"] / group["price"].iloc[0]) - 1) * 100
+        first_price = float(group["price"].head(1).item())
+        norm = ((group["price"] / first_price) - 1) * 100
         ax.plot(group["timestamp_utc"], norm, marker="o", markersize=6, label=symbol)
 
     ax.set_title("Stock Market Progression (% Change)", fontsize=13, fontweight="bold")
