@@ -7,19 +7,27 @@ import yfinance as yf
 
 st.set_page_config(page_title="Market Pulse Pro", page_icon="📈", layout="wide")
 
-# Cache live Yahoo Finance calls for 5 minutes so public traffic stays fast
+
 @st.cache_data(ttl=300)
 def get_live_history(symbol: str, period: str = "6mo"):
-    return yf.Ticker(symbol).history(period=period)
+    try:
+        return yf.Ticker(symbol).history(period=period)
+    except Exception:
+        return pd.DataFrame()
+
 
 @st.cache_data(ttl=600)
 def get_ticker_news(symbol: str):
-    return yf.Ticker(symbol).news[:5]
+    try:
+        news = yf.Ticker(symbol).news
+        return news[:5] if news else []
+    except Exception:
+        return []
+
 
 st.title("📈 Market Pulse Pro")
 st.caption("Real-world market progression, interactive simulator & live market intelligence")
 
-# Top Navigation Tabs
 tab_overview, tab_explorer, tab_simulator = st.tabs(
     ["📊 Market Progression", "🔍 Live Ticker & News", "💰 Investment Simulator"]
 )
@@ -33,19 +41,18 @@ with tab_overview:
         df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"])
         tickers = df["ticker"].unique().tolist()
 
-        col_f1, col_f2 = st.columns([3, 1])
+        col_f1, col_f2 = st.columns(2)
         with col_f1:
             selected = st.multiselect("Compare Assets", tickers, default=tickers)
         with col_f2:
             mode = st.selectbox("Metric", ["Normalized Growth (%)", "Raw Price"])
 
-        filtered = df[df["ticker"].isin(selected)].copy()
+        filtered = df[df["ticker"].isin(selected)].sort_values("timestamp_utc").copy()
         if not filtered.empty:
             if mode == "Normalized Growth (%)":
-              filtered["plot_val"] = filtered.groupby("ticker")["price"].transform(
-                  lambda x: ((x / x.iloc[0]) - 1) * 100
-              )
-
+                filtered["plot_val"] = filtered.groupby("ticker")["price"].transform(
+                    lambda x: ((x / x.iloc[0]) - 1) * 100
+                )
                 y_title = "Return (%)"
             else:
                 filtered["plot_val"] = filtered["price"]
@@ -62,12 +69,14 @@ with tab_overview:
             )
             fig.update_layout(hovermode="x unified", height=430)
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Select at least one asset above to display the chart.")
     else:
         st.info("Run your GitHub Action workflow to populate historical tracking data.")
 
 # --- TAB 2: LIVE DEEP-DIVE & NEWS ---
 with tab_explorer:
-    c1, c2 = st.columns([2, 1])
+    c1, c2 = st.columns(2)
     with c1:
         symbol = st.text_input("Enter Ticker Symbol", value="NVDA").upper().strip()
     with c2:
@@ -102,11 +111,16 @@ with tab_explorer:
             st.plotly_chart(fig_candle, use_container_width=True)
 
             st.subheader(f"📰 Latest Headlines for {symbol}")
-            for article in get_ticker_news(symbol):
-                content = article.get("content", article)
-                title = content.get("title", "Market Update")
-                link = content.get("canonicalUrl", {}).get("url") or content.get("link", "#")
-                st.markdown(f"- [{title}]({link})")
+            news_items = get_ticker_news(symbol)
+            if news_items:
+                for article in news_items:
+                    content = article.get("content", article)
+                    title = content.get("title", "Market Update")
+                    canonical = content.get("canonicalUrl") or {}
+                    link = canonical.get("url") or content.get("link", "#")
+                    st.markdown(f"- [{title}]({link})")
+            else:
+                st.caption("No recent headlines available for this ticker.")
         else:
             st.error("Ticker not found. Try a valid symbol like AAPL, MSFT, or BTC-USD.")
 
@@ -117,13 +131,15 @@ with tab_simulator:
     with s1:
         sim_ticker = st.text_input("Asset Ticker", value="^GSPC").upper().strip()
     with s2:
-        invest_amount = st.number_input("Initial Investment ($)", min_value=10.0, value=1000.0, step=100.0)
+        invest_amount = st.number_input(
+            "Initial Investment ($)", min_value=10.0, value=1000.0, step=100.0
+        )
     with s3:
         sim_period = st.selectbox("Holding Period", ["6mo", "1y", "2y", "5y"], index=1)
 
     sim_hist = get_live_history(sim_ticker, sim_period)
     if not sim_hist.empty:
-        start_price = float(sim_hist["Close"].iloc)
+        start_price = float(sim_hist["Close"].iloc[0])
         end_price = float(sim_hist["Close"].iloc[-1])
         final_value = invest_amount * (end_price / start_price)
         profit = final_value - invest_amount
@@ -142,3 +158,8 @@ with tab_simulator:
             title=f"Growth of ${invest_amount:,.0f} in {sim_ticker} ({sim_period})",
         )
         st.plotly_chart(fig_sim, use_container_width=True)
+    else:
+        st.error("Unable to load historical data for that ticker.")
+
+st.divider()
+st.caption("⚠️ For informational and educational purposes only. Not financial advice.")
