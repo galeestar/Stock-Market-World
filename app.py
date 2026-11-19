@@ -1,4 +1,6 @@
 import os
+from datetime import datetime, timezone
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -6,24 +8,37 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 
-# --- PAGE CONFIGURATION ---
+# ==============================================================================
+# PAGE CONFIG & INSTITUTIONAL TERMINAL STYLING
+# ==============================================================================
 st.set_page_config(
-    page_title="Atlas Market Terminal",
-    page_icon="🌐",
+    page_title="Atlas Sovereign Terminal",
+    page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# --- CUSTOM TERMINAL STYLING ---
 st.markdown(
     """
     <style>
-    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
+    .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
     div[data-testid="stMetric"] {
-        background-color: #151A24;
-        border: 1px solid #263042;
+        background: linear-gradient(145deg, #131822, #19202e);
+        border: 1px solid #283347;
         padding: 14px 18px;
         border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    }
+    .status-pill {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+        background-color: #162436;
+        border: 1px solid #2b4466;
+        color: #38bdf8;
+        margin-right: 8px;
     }
     </style>
     """,
@@ -31,9 +46,11 @@ st.markdown(
 )
 
 
-# --- CACHED DATA ENGINES ---
+# ==============================================================================
+# CACHED DATA & QUANTITATIVE ENGINES (ZERO BRACKET INDEXING)
+# ==============================================================================
 @st.cache_data(ttl=300)
-def get_live_history(symbol: str, period: str = "6mo"):
+def get_live_history(symbol: str, period: str = "6mo") -> pd.DataFrame:
     try:
         return yf.Ticker(symbol).history(period=period)
     except Exception:
@@ -41,7 +58,7 @@ def get_live_history(symbol: str, period: str = "6mo"):
 
 
 @st.cache_data(ttl=300)
-def get_multi_close(symbols: tuple, period: str = "1y"):
+def get_multi_close(symbols: tuple, period: str = "1y") -> pd.DataFrame:
     try:
         raw = yf.download(list(symbols), period=period, progress=False)
         if raw.empty:
@@ -49,7 +66,7 @@ def get_multi_close(symbols: tuple, period: str = "1y"):
         if "Close" in raw:
             close_df = raw["Close"]
             if isinstance(close_df, pd.Series):
-                return close_df.to_frame(name=symbols[0])
+                return close_df.to_frame(name=symbols)
             return close_df.dropna(how="all")
         return pd.DataFrame()
     except Exception:
@@ -57,7 +74,7 @@ def get_multi_close(symbols: tuple, period: str = "1y"):
 
 
 @st.cache_data(ttl=600)
-def get_ticker_news(symbol: str):
+def get_ticker_news(symbol: str) -> list:
     try:
         news = yf.Ticker(symbol).news
         return news[:6] if news else []
@@ -65,8 +82,8 @@ def get_ticker_news(symbol: str):
         return []
 
 
-@st.cache_data(ttl=3600)
-def get_usd_ngn_rate():
+@st.cache_data(ttl=1800)
+def get_usd_ngn_rate() -> float:
     try:
         fx = yf.Ticker("NGN=X").history(period="5d")
         if not fx.empty:
@@ -80,58 +97,95 @@ def compute_rsi(series: pd.Series, window: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0).rolling(window=window).mean()
     loss = (-delta.clip(upper=0)).rolling(window=window).mean()
-    rs = gain / loss.replace(0, pd.NA)
+    rs = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
 
-# --- SIDEBAR: GLOBAL TELEMETRY & NAVIGATION ---
+def compute_macd(series: pd.Series):
+    ema12 = series.ewm(span=12, adjust=False).mean()
+    ema26 = series.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist
+
+
+# ==============================================================================
+# SIDEBAR: SOVEREIGN MACRO TELEMETRY & LIVE FX CONVERTER
+# ==============================================================================
 with st.sidebar:
-    st.title("🌐 Atlas Terminal")
-    st.caption("Real-Time Global & Local Market Intelligence")
+    st.title("🏛️ Atlas Sovereign")
+    st.caption("Global & Nigerian Market Intelligence")
 
     fx_rate = get_usd_ngn_rate()
-    st.metric("USD / NGN Reference Rate", f"₦{fx_rate:,.2f}")
+    st.metric("USD / NGN Live Reference", f"₦{fx_rate:,.2f}")
+
+    with st.expander("💱 Instant USD ↔ NGN Converter", expanded=False):
+        conv_dir = st.radio("Direction", ["USD ($) → NGN (₦)", "NGN (₦) → USD ($)"], horizontal=True)
+        conv_amt = st.number_input("Amount", min_value=1.0, value=100.0, step=10.0)
+        if conv_dir == "USD ($) → NGN (₦)":
+            st.success(f"**₦{conv_amt * fx_rate:,.2f}**")
+        else:
+            st.success(f"**${conv_amt / fx_rate:,.2f}**")
 
     st.divider()
-    st.subheader("⚡ Quick Watchlist Pulse")
-    pulse_tickers = {
+    st.subheader("📡 Global Macro Tape")
+    macro_assets = {
         "S&P 500": "^GSPC",
-        "NASDAQ": "^IXIC",
+        "NASDAQ 100": "^IXIC",
         "Bitcoin": "BTC-USD",
         "Gold": "GC=F",
+        "Brent Crude": "BZ=F",
     }
-    for label, sym in pulse_tickers.items():
-        p_hist = get_live_history(sym, "5d")
-        if len(p_hist) >= 2:
-            curr = float(p_hist["Close"].tail(1).item())
-            prev = float(p_hist["Close"].tail(2).head(1).item())
+    for label, sym in macro_assets.items():
+        m_hist = get_live_history(sym, "5d")
+        if len(m_hist) >= 2:
+            curr = float(m_hist["Close"].tail(1).item())
+            prev = float(m_hist["Close"].tail(2).head(1).item())
             chg = ((curr - prev) / prev) * 100 if prev else 0.0
             st.metric(label, f"{curr:,.2f}", f"{chg:+.2f}%")
 
     st.divider()
-    if st.button("🔄 Refresh Live Market Feed", use_container_width=True):
+    if st.button("🔄 Sync Live Market Feeds", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# --- MAIN HEADER ---
-st.title("🌐 Atlas Global Market Terminal")
-st.caption(
-    "Live multi-asset analytics, technical charting, portfolio battleground & wealth simulator"
-)
+# ==============================================================================
+# TOP COMMAND HEADER & SESSION CLOCK
+# ==============================================================================
+now_utc = datetime.now(timezone.utc)
+utc_hour = now_utc.hour
+us_open = (now_utc.weekday() < 5) and (14 <= utc_hour < 21)
+ngx_open = (now_utc.weekday() < 5) and (9 <= utc_hour < 14)
 
-tab_pro, tab_battle, tab_sim, tab_github = st.tabs(
+st.title("🏛️ Atlas Sovereign Market Terminal")
+st.markdown(
+    f"""
+    <span class="status-pill">🕒 UTC: {now_utc.strftime('%H:%M')}</span>
+    <span class="status-pill">🇺🇸 US Markets: {'🟢 OPEN' if us_open else '🔴 CLOSED'}</span>
+    <span class="status-pill">🇳🇬 NGX Session: {'🟢 OPEN' if ngx_open else '🔴 CLOSED'}</span>
+    """,
+    unsafe_allow_html=True,
+)
+st.write("")
+
+# ==============================================================================
+# 5-TAB INSTITUTIONAL WORKSPACE
+# ==============================================================================
+tab_chart, tab_quant, tab_battle, tab_wealth, tab_github = st.tabs(
     [
-        "📊 Pro Charting & News",
-        "⚔️ Asset Battleground",
-        "💰 Wealth & DCA Simulator",
+        "📊 Quant Charting & Intel",
+        "🧠 Portfolio & Risk Lab",
+        "⚔️ Multi-Asset Battleground",
+        "💰 Dual-Currency Wealth Engine",
         "🤖 GitHub Auto-Tracker",
     ]
 )
 
-# ==============================================================================
-# TAB 1: PRO TECHNICAL CHARTING & NEWS
-# ==============================================================================
-with tab_pro:
+# ------------------------------------------------------------------------------
+# TAB 1: QUANTITATIVE TECHNICAL CHARTING & LIVE INTELLIGENCE
+# ------------------------------------------------------------------------------
+with tab_chart:
     presets = {
         "NVIDIA (NVDA)": "NVDA",
         "Apple (AAPL)": "AAPL",
@@ -139,52 +193,63 @@ with tab_pro:
         "S&P 500 Index (^GSPC)": "^GSPC",
         "NASDAQ Composite (^IXIC)": "^IXIC",
         "Bitcoin (BTC-USD)": "BTC-USD",
+        "Ethereum (ETH-USD)": "ETH-USD",
         "Gold Futures (GC=F)": "GC=F",
-        "Crude Oil (CL=F)": "CL=F",
+        "Brent Crude Oil (BZ=F)": "BZ=F",
         "Custom Ticker...": "",
     }
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        choice = st.selectbox("Select Market Asset", list(presets.keys()), index=0)
+        choice = st.selectbox("Asset Preset", list(presets.keys()), index=0)
     with c2:
-        default_val = presets[choice] if presets[choice] else "TSLA"
-        symbol = st.text_input("Ticker Symbol", value=default_val).upper().strip()
+        default_sym = presets[choice] if presets[choice] else "TSLA"
+        symbol = st.text_input("Ticker Symbol", value=default_sym).upper().strip()
     with c3:
-        period = st.selectbox("Chart Timeframe", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=2)
+        period = st.selectbox("Lookback Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
 
-    ind1, ind2, ind3 = st.columns(3)
+    ind1, ind2, ind3, ind4 = st.columns(4)
     with ind1:
-        show_sma20 = st.checkbox("20-Day Moving Average", value=True)
+        show_sma = st.checkbox("20 & 50 SMAs", value=True)
     with ind2:
-        show_sma50 = st.checkbox("50-Day Moving Average", value=True)
+        show_bb = st.checkbox("Bollinger Bands (20, 2)", value=True)
     with ind3:
-        show_rsi = st.checkbox("Show RSI Momentum Panel", value=True)
+        show_rsi = st.checkbox("RSI (14) Momentum", value=True)
+    with ind4:
+        show_macd = st.checkbox("MACD Oscillator", value=False)
 
     if symbol:
         hist = get_live_history(symbol, period)
         if not hist.empty and len(hist) >= 2:
             latest_c = float(hist["Close"].tail(1).item())
             prev_c = float(hist["Close"].tail(2).head(1).item())
+            first_c = float(hist["Close"].head(1).item())
             day_chg = ((latest_c - prev_c) / prev_c) * 100
+            period_chg = ((latest_c - first_c) / first_c) * 100
             period_high = float(hist["High"].max())
             period_low = float(hist["Low"].min())
-            latest_vol = int(hist["Volume"].tail(1).item())
 
             k1, k2, k3, k4 = st.columns(4)
-            k1.metric(f"{symbol} Price", f"${latest_c:,.2f}", f"{day_chg:+.2f}%")
-            k2.metric(f"{period.upper()} High", f"${period_high:,.2f}")
-            k3.metric(f"{period.upper()} Low", f"${period_low:,.2f}")
-            k4.metric("Latest Volume", f"{latest_vol:,}")
+            k1.metric(f"{symbol} Last Price", f"${latest_c:,.2f}", f"{day_chg:+.2f}% (1D)")
+            k2.metric(f"{period.upper()} Return", f"{period_chg:+.2f}%", f"From ${first_c:,.2f}")
+            k3.metric(f"{period.upper()} Range High", f"${period_high:,.2f}")
+            k4.metric(f"{period.upper()} Range Low", f"${period_low:,.2f}")
 
-            rows = 2 if show_rsi else 1
-            row_heights = [0.72, 0.28] if show_rsi else [1.0]
+            # Dynamic Subplot Builder
+            panel_count = 1 + int(show_rsi) + int(show_macd)
+            if panel_count == 1:
+                heights = [1.0]
+            elif panel_count == 2:
+                heights = [0.72, 0.28]
+            else:
+                heights = [0.56, 0.22, 0.22]
+
             fig = make_subplots(
-                rows=rows,
+                rows=panel_count,
                 cols=1,
                 shared_xaxes=True,
                 vertical_spacing=0.04,
-                row_heights=row_heights,
+                row_heights=heights,
             )
 
             fig.add_trace(
@@ -194,97 +259,27 @@ with tab_pro:
                     high=hist["High"],
                     low=hist["Low"],
                     close=hist["Close"],
-                    name="OHLC",
+                    name="Price",
                 ),
                 row=1,
                 col=1,
             )
 
-            if show_sma20:
+            sma20 = hist["Close"].rolling(20).mean()
+            std20 = hist["Close"].rolling(20).std()
+
+            if show_sma:
                 fig.add_trace(
                     go.Scatter(
                         x=hist.index,
-                        y=hist["Close"].rolling(20).mean(),
-                        line=dict(color="#00E676", width=1.6),
-                        name="20-Day SMA",
+                        y=sma20,
+                        line=dict(color="#00E676", width=1.5),
+                        name="SMA 20",
                     ),
                     row=1,
                     col=1,
                 )
-
-            if show_sma50:
                 fig.add_trace(
                     go.Scatter(
                         x=hist.index,
                         y=hist["Close"].rolling(50).mean(),
-                        line=dict(color="#38BDF8", width=1.6),
-                        name="50-Day SMA",
-                    ),
-                    row=1,
-                    col=1,
-                )
-
-            if show_rsi:
-                rsi_series = compute_rsi(hist["Close"])
-                fig.add_trace(
-                    go.Scatter(
-                        x=hist.index,
-                        y=rsi_series,
-                        line=dict(color="#C084FC", width=1.6),
-                        name="RSI (14)",
-                    ),
-                    row=2,
-                    col=1,
-                )
-                fig.add_hline(y=70, line_dash="dash", line_color="#EF4444", row=2, col=1)
-                fig.add_hline(y=30, line_dash="dash", line_color="#10B981", row=2, col=1)
-                fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
-
-            fig.update_layout(
-                template="plotly_dark",
-                xaxis_rangeslider_visible=False,
-                height=540 if show_rsi else 440,
-                hovermode="x unified",
-                margin=dict(l=10, r=10, t=20, b=10),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Live Headlines
-            st.subheader(f"📰 Live Intelligence Feed: {symbol}")
-            articles = get_ticker_news(symbol)
-            if articles:
-                for art in articles:
-                    content = art.get("content", art)
-                    title = content.get("title", "Market Headline")
-                    canonical = content.get("canonicalUrl") or {}
-                    url = canonical.get("url") or content.get("link", "#")
-                    provider = (content.get("provider") or {}).get("displayName", "Market News")
-                    st.markdown(f"**[{title}]({url})** — *{provider}*")
-            else:
-                st.caption("No recent headlines found for this symbol.")
-        else:
-            st.error("Unable to fetch data for that ticker. Check the symbol and try again.")
-
-# ==============================================================================
-# TAB 2: MULTI-ASSET BATTLEGROUND (HEAD-TO-HEAD COMPARISON)
-# ==============================================================================
-with tab_battle:
-    st.subheader("⚔️ Head-to-Head Asset Performance")
-    st.caption("Compare percentage progression across stocks, indices, crypto, and commodities from a 0% baseline.")
-
-    b1, b2 = st.columns([3, 1])
-    with b1:
-        compare_input = st.text_input(
-            "Enter Tickers Separated by Commas",
-            value="^GSPC, NVDA, AAPL, BTC-USD, GC=F",
-        )
-    with b2:
-        battle_period = st.selectbox("Comparison Window", ["1mo", "3mo", "6mo", "1y", "3y", "5y"], index=3)
-
-    ticker_list = tuple(t.strip().upper() for t in compare_input.split(",") if t.strip())
-    if ticker_list:
-        close_df = get_multi_close(ticker_list, battle_period)
-        if not close_df.empty:
-            norm_df = pd.DataFrame(index=close_df.index)
-            for col in close_df.columns:
-                valid_col = close_df[col].dropna()
